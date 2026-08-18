@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.database import Base, engine, SessionLocal
 from app.models import Project, TestCase
+from app.services.ai_service import generate_test
 
 
 Base.metadata.create_all(bind=engine)
@@ -47,6 +48,11 @@ class TestCaseUpdate(BaseModel):
     framework: str
     generated_code: str | None = None
     status: str
+
+
+class AITestCaseCreate(BaseModel):
+    project_id: int
+    prompt: str
 
 
 # =========================
@@ -123,7 +129,11 @@ def get_project(
     project_id: int,
     db: Session = Depends(get_db),
 ):
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = (
+        db.query(Project)
+        .filter(Project.id == project_id)
+        .first()
+    )
 
     if not project:
         raise HTTPException(
@@ -146,7 +156,11 @@ def update_project(
     project_data: ProjectUpdate,
     db: Session = Depends(get_db),
 ):
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = (
+        db.query(Project)
+        .filter(Project.id == project_id)
+        .first()
+    )
 
     if not project:
         raise HTTPException(
@@ -175,7 +189,11 @@ def delete_project(
     project_id: int,
     db: Session = Depends(get_db),
 ):
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = (
+        db.query(Project)
+        .filter(Project.id == project_id)
+        .first()
+    )
 
     if not project:
         raise HTTPException(
@@ -358,4 +376,68 @@ def delete_test_case(
 
     return {
         "message": "Test case deleted successfully.",
+    }
+
+
+# =========================
+# AI TEST CASE GENERATION
+# =========================
+
+@app.post("/api/v1/test-cases/generate")
+def generate_test_case(
+    request: AITestCaseCreate,
+    db: Session = Depends(get_db),
+):
+    # 1. Projenin varlığını kontrol et
+    project = (
+        db.query(Project)
+        .filter(Project.id == request.project_id)
+        .first()
+    )
+
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found.",
+        )
+
+    # 2. AI ile test case üret
+    try:
+        ai_result = generate_test(request.prompt)
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"AI test generation failed: {str(e)}",
+        )
+
+    # 3. AI sonucunu TestCase modeline aktar
+    new_test_case = TestCase(
+        project_id=request.project_id,
+        title=ai_result["title"],
+        description=ai_result["description"],
+        test_type=ai_result["test_type"],
+        framework=ai_result["framework"],
+        generated_code=ai_result["generated_code"],
+        status=ai_result["status"],
+    )
+
+    # 4. Veritabanına kaydet
+    db.add(new_test_case)
+    db.commit()
+    db.refresh(new_test_case)
+
+    # 5. Response
+    return {
+        "message": "Test case generated successfully.",
+        "test_case": {
+            "id": new_test_case.id,
+            "project_id": new_test_case.project_id,
+            "title": new_test_case.title,
+            "description": new_test_case.description,
+            "test_type": new_test_case.test_type,
+            "framework": new_test_case.framework,
+            "generated_code": new_test_case.generated_code,
+            "status": new_test_case.status,
+        },
     }
